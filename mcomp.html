@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Advanced Music Composer</title>
+  <style>
+    body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; }
+    #grid { display: grid; grid-template-columns: repeat(16, 40px); grid-template-rows: repeat(8, 40px); margin: 20px; }
+    .cell { width: 40px; height: 40px; border: 1px solid #ccc; cursor: pointer; }
+    .active { background: #4caf50; }
+    .playing { border: 2px solid red; }
+    select, input, button { margin: 5px; padding: 5px; }
+  </style>
+</head>
+<body>
+  <h1>Advanced Music Composer</h1>
+  <div>
+    Scale: 
+    <select id="scaleSelect">
+      <option value="C">C Major</option>
+      <option value="D">D Major</option>
+      <option value="A">A Minor</option>
+    </select>
+    Waveform:
+    <select id="waveformSelect">
+      <option value="sine">Sine</option>
+      <option value="square">Square</option>
+      <option value="triangle">Triangle</option>
+      <option value="sawtooth">Sawtooth</option>
+    </select>
+  </div>
+  <div>
+    Tempo (BPM): <input type="range" id="tempo" min="60" max="240" value="120">
+    Volume: <input type="range" id="volume" min="0" max="1" step="0.01" value="0.2">
+    Note Length (ms): <input type="range" id="length" min="100" max="1000" value="300">
+  </div>
+  <button id="playBtn">Play</button>
+  <button id="saveBtn">Save</button>
+  <button id="loadBtn">Load</button>
+  <button id="downloadMIDI">Export MIDI</button>
+  <div id="grid"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@tonejs/midi@2.0.27/build/Midi.min.js"></script>
+  <script>
+    const rows = 8, cols = 16;
+    const grid = document.getElementById('grid');
+    const playBtn = document.getElementById('playBtn');
+    const saveBtn = document.getElementById('saveBtn');
+    const loadBtn = document.getElementById('loadBtn');
+    const scaleSelect = document.getElementById('scaleSelect');
+    const waveformSelect = document.getElementById('waveformSelect');
+    const tempoSlider = document.getElementById('tempo');
+    const volumeSlider = document.getElementById('volume');
+    const lengthSlider = document.getElementById('length');
+
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    let notes = Array.from({ length: rows }, () => Array.from({ length: cols }, () => []));
+    const freqs = {
+      C: [261.63, 294.33, 327.03, 348.84, 392.44, 436.05, 490.56, 523.26],
+      D: [293.66, 329.63, 367.92, 391.0, 440.0, 489.9, 551.3, 587.3],
+      A: [220.0, 246.9, 275.0, 293.7, 329.6, 367.9, 413.3, 440.0]
+    };
+
+    let currentScale = freqs['C'];
+    let isPlaying = false, currentCol = 0, intervalId = null;
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+        cell.dataset.row = r;
+        cell.dataset.col = c;
+        cell.addEventListener('click', e => {
+          const already = notes[r][c].some(n => n === currentScale[r]);
+          if (e.ctrlKey) {
+            if (!already) notes[r][c].push(currentScale[r]);
+          } else if (already) {
+            notes[r][c] = [];
+          } else {
+            notes[r][c] = [currentScale[r]];
+          }
+          cell.classList.toggle('active', notes[r][c].length > 0);
+        });
+        grid.appendChild(cell);
+      }
+    }
+
+    function playNote(freq, waveform, volume, length) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = waveform;
+      osc.frequency.value = freq;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      gain.gain.setValueAtTime(volume, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + length / 1000);
+      osc.start();
+      osc.stop(ctx.currentTime + length / 1000);
+    }
+
+    function step() {
+      document.querySelectorAll('.cell').forEach(cell => {
+        cell.classList.toggle('playing', parseInt(cell.dataset.col) === currentCol);
+      });
+
+      const waveform = waveformSelect.value;
+      const volume = parseFloat(volumeSlider.value);
+      const length = parseInt(lengthSlider.value);
+
+      for (let r = 0; r < rows; r++) {
+        notes[r][currentCol].forEach(freq => {
+          playNote(freq, waveform, volume, length);
+        });
+      }
+      currentCol = (currentCol + 1) % cols;
+    }
+
+    playBtn.addEventListener('click', () => {
+      if (!isPlaying) {
+        const bpm = parseInt(tempoSlider.value);
+        intervalId = setInterval(step, 60000 / bpm / 2);
+        isPlaying = true;
+        playBtn.textContent = 'Pause';
+      } else {
+        clearInterval(intervalId);
+        isPlaying = false;
+        playBtn.textContent = 'Play';
+      }
+    });
+
+    scaleSelect.addEventListener('change', () => {
+      currentScale = freqs[scaleSelect.value];
+    });
+
+    saveBtn.addEventListener('click', () => {
+      localStorage.setItem('savedNotes', JSON.stringify(notes));
+      alert('Saved!');
+    });
+
+    loadBtn.addEventListener('click', () => {
+      const loaded = JSON.parse(localStorage.getItem('savedNotes'));
+      if (loaded) {
+        notes = loaded;
+        document.querySelectorAll('.cell').forEach(cell => {
+          const r = parseInt(cell.dataset.row);
+          const c = parseInt(cell.dataset.col);
+          cell.classList.toggle('active', notes[r][c].length > 0);
+        });
+        alert('Loaded!');
+      }
+    });
+
+    document.getElementById('downloadMIDI').addEventListener('click', () => {
+      const midi = new Midi();
+      const track = midi.addTrack();
+      const bpm = parseInt(tempoSlider.value);
+      const beatDur = 60000 / bpm / 2 / 1000;
+      for (let c = 0; c < cols; c++) {
+        for (let r = 0; r < rows; r++) {
+          notes[r][c].forEach(freq => {
+            track.addNote({ midi: Math.round(69 + 12 * Math.log2(freq / 440)), time: c * beatDur, duration: beatDur });
+          });
+        }
+      }
+      const bytes = midi.toArray();
+      const blob = new Blob([bytes], { type: 'audio/midi' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'composition.mid';
+      a.click();
+    });
+  </script>
+</body>
+</html>
