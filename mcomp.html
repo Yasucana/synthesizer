@@ -129,7 +129,23 @@
     });
 
     scaleSelect.addEventListener('change', () => {
+      const oldScale = currentScale;
       currentScale = freqs[scaleSelect.value];
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          if (notes[r][c].length > 0) {
+            notes[r][c] = [currentScale[r]];
+          }
+        }
+      }
+    });
+
+    tempoSlider.addEventListener('input', () => {
+      if (isPlaying) {
+        clearInterval(intervalId);
+        const bpm = parseInt(tempoSlider.value);
+        intervalId = setInterval(step, 60000 / bpm / 2);
+      }
     });
 
     saveBtn.addEventListener('click', () => {
