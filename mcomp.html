@@ -4,9 +4,28 @@
   <meta charset="UTF-8">
   <title>Advanced Music Composer</title>
   <style>
-    body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; }
-    #grid { display: grid; grid-template-columns: repeat(16, 40px); grid-template-rows: repeat(8, 40px); margin: 20px; }
-    .cell { width: 40px; height: 40px; border: 1px solid #ccc; cursor: pointer; }
+    body {
+      font-family: sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    #grid {
+      display: grid;
+      margin: 20px;
+      grid-template-columns: repeat(16, 40px);
+      grid-template-rows: repeat(8, 40px);
+      border: 1px solid #999;
+      background: #fff;
+    }
+    .cell {
+      width: 40px;
+      height: 40px;
+      border: 1px solid #666;
+      box-sizing: border-box;
+      background: #eee;
+      cursor: pointer;
+    }
     .active { background: #4caf50; }
     .playing { border: 2px solid red; }
     select, input, button { margin: 5px; padding: 5px; }
@@ -15,7 +34,7 @@
 <body>
   <h1>Advanced Music Composer</h1>
   <div>
-    Scale: 
+    Scale:
     <select id="scaleSelect">
       <option value="C">C Major</option>
       <option value="D">D Major</option>
@@ -28,12 +47,31 @@
       <option value="triangle">Triangle</option>
       <option value="sawtooth">Sawtooth</option>
     </select>
+    Effect:
+    <select id="effectSelect">
+      <option value="none">None</option>
+      <option value="delay">Delay</option>
+      <option value="reverb">Reverb</option>
+    </select>
+    Track:
+    <select id="trackSelect">
+      <option value="0">Track 1</option>
+      <option value="1">Track 2</option>
+      <option value="2">Track 3</option>
+    </select>
   </div>
   <div>
     Tempo (BPM): <input type="range" id="tempo" min="60" max="240" value="120">
     Volume: <input type="range" id="volume" min="0" max="1" step="0.01" value="0.2">
     Note Length (ms): <input type="range" id="length" min="100" max="1000" value="300">
   </div>
+  <div>
+    Columns: <input type="number" id="colInput" min="4" max="64" value="16">
+    <button id="applyGrid">Apply Grid</button>
+    Tempo Pattern (per measure, comma separated):
+    <input type="text" id="tempoPattern" placeholder="120,120">
+  </div>
+  <div id="harmonics"></div>
   <button id="playBtn">Play</button>
   <button id="saveBtn">Save</button>
   <button id="loadBtn">Load</button>
@@ -42,19 +80,31 @@
 
   <script src="https://cdn.jsdelivr.net/npm/@tonejs/midi@2.0.27/build/Midi.min.js"></script>
   <script>
-    const rows = 8, cols = 16;
+    let rows = 8, cols = 16;
     const grid = document.getElementById('grid');
     const playBtn = document.getElementById('playBtn');
     const saveBtn = document.getElementById('saveBtn');
     const loadBtn = document.getElementById('loadBtn');
     const scaleSelect = document.getElementById('scaleSelect');
     const waveformSelect = document.getElementById('waveformSelect');
+    const effectSelect = document.getElementById('effectSelect');
+    const trackSelect = document.getElementById('trackSelect');
     const tempoSlider = document.getElementById('tempo');
     const volumeSlider = document.getElementById('volume');
     const lengthSlider = document.getElementById('length');
+    const colInput = document.getElementById('colInput');
+    const applyGridBtn = document.getElementById('applyGrid');
+    const tempoPatternInput = document.getElementById('tempoPattern');
+    const harmonicDiv = document.getElementById('harmonics');
 
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    let notes = Array.from({ length: rows }, () => Array.from({ length: cols }, () => []));
+    const trackCount = 3;
+    let notes = Array.from({ length: trackCount }, () =>
+      Array.from({ length: rows }, () => Array.from({ length: cols }, () => []))
+    );
+    let harmonics = Array.from({ length: rows }, () => false);
+    let tempoPattern = [];
+    let reverbBuffer = null;
     const freqs = {
       C: [261.63, 294.33, 327.03, 348.84, 392.44, 436.05, 490.56, 523.26],
       D: [293.66, 329.63, 367.92, 391.0, 440.0, 489.9, 551.3, 587.3],
@@ -64,25 +114,61 @@
     let currentScale = freqs['C'];
     let isPlaying = false, currentCol = 0, intervalId = null;
 
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const cell = document.createElement('div');
-        cell.className = 'cell';
-        cell.dataset.row = r;
-        cell.dataset.col = c;
-        cell.addEventListener('click', e => {
-          const already = notes[r][c].some(n => n === currentScale[r]);
-          if (e.ctrlKey) {
-            if (!already) notes[r][c].push(currentScale[r]);
-          } else if (already) {
-            notes[r][c] = [];
-          } else {
-            notes[r][c] = [currentScale[r]];
-          }
-          cell.classList.toggle('active', notes[r][c].length > 0);
+    function buildGrid() {
+      grid.innerHTML = '';
+      grid.style.gridTemplateColumns = `repeat(${cols}, 40px)`;
+      grid.style.gridTemplateRows = `repeat(${rows}, 40px)`;
+      harmonicDiv.innerHTML = '';
+      harmonics = Array.from({ length: rows }, () => false);
+      notes = Array.from({ length: trackCount }, () =>
+        Array.from({ length: rows }, () => Array.from({ length: cols }, () => []))
+      );
+      for (let r = 0; r < rows; r++) {
+        const hChk = document.createElement('label');
+        hChk.textContent = `Row ${r + 1}`;
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.dataset.row = r;
+        cb.addEventListener('change', () => {
+          harmonics[r] = cb.checked;
         });
-        grid.appendChild(cell);
+        hChk.appendChild(cb);
+        harmonicDiv.appendChild(hChk);
+        for (let c = 0; c < cols; c++) {
+          const cell = document.createElement('div');
+          cell.className = 'cell';
+          cell.dataset.row = r;
+          cell.dataset.col = c;
+          cell.addEventListener('click', e => {
+            const track = parseInt(trackSelect.value);
+            const already = notes[track][r][c].some(n => n === currentScale[r]);
+            if (e.ctrlKey) {
+              if (!already) notes[track][r][c].push(currentScale[r]);
+            } else if (already) {
+              notes[track][r][c] = [];
+            } else {
+              notes[track][r][c] = [currentScale[r]];
+            }
+            cell.classList.toggle('active', notes[track][r][c].length > 0);
+          });
+          grid.appendChild(cell);
+        }
       }
+    }
+    buildGrid();
+
+    function createReverb() {
+      if (reverbBuffer) return reverbBuffer;
+      const length = ctx.sampleRate * 2;
+      const impulse = ctx.createBuffer(2, length, ctx.sampleRate);
+      for (let c = 0; c < 2; c++) {
+        const data = impulse.getChannelData(c);
+        for (let i = 0; i < length; i++) {
+          data[i] = (Math.random() * 2 - 1) * (1 - i / length);
+        }
+      }
+      reverbBuffer = impulse;
+      return reverbBuffer;
     }
 
     function playNote(freq, waveform, volume, length) {
@@ -90,7 +176,23 @@
       const gain = ctx.createGain();
       osc.type = waveform;
       osc.frequency.value = freq;
-      osc.connect(gain);
+      let node = osc;
+      if (effectSelect.value === 'delay') {
+        const delay = ctx.createDelay();
+        delay.delayTime.value = 0.25;
+        const fb = ctx.createGain();
+        fb.gain.value = 0.3;
+        delay.connect(fb);
+        fb.connect(delay);
+        osc.connect(delay);
+        node = delay;
+      } else if (effectSelect.value === 'reverb') {
+        const convolver = ctx.createConvolver();
+        convolver.buffer = createReverb();
+        osc.connect(convolver);
+        node = convolver;
+      }
+      node.connect(gain);
       gain.connect(ctx.destination);
       gain.gain.setValueAtTime(volume, ctx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + length / 1000);
@@ -107,34 +209,41 @@
       const volume = parseFloat(volumeSlider.value);
       const length = parseInt(lengthSlider.value);
 
-      for (let r = 0; r < rows; r++) {
-        notes[r][currentCol].forEach(freq => {
-          playNote(freq, waveform, volume, length);
-        });
+      for (let t = 0; t < trackCount; t++) {
+        for (let r = 0; r < rows; r++) {
+          notes[t][r][currentCol].forEach(freq => {
+            playNote(freq, waveform, volume, length);
+            if (harmonics[r]) playNote(freq * 2, waveform, volume * 0.5, length);
+          });
+        }
       }
       currentCol = (currentCol + 1) % cols;
+      const measureIdx = Math.floor(currentCol / 4);
+      const bpm = tempoPattern[measureIdx] ? parseInt(tempoPattern[measureIdx]) : parseInt(tempoSlider.value);
+      intervalId = setTimeout(step, 60000 / bpm / 2);
     }
 
     playBtn.addEventListener('click', () => {
       if (!isPlaying) {
         const bpm = parseInt(tempoSlider.value);
-        intervalId = setInterval(step, 60000 / bpm / 2);
+        intervalId = setTimeout(step, 60000 / bpm / 2);
         isPlaying = true;
         playBtn.textContent = 'Pause';
       } else {
-        clearInterval(intervalId);
+        clearTimeout(intervalId);
         isPlaying = false;
         playBtn.textContent = 'Play';
       }
     });
 
     scaleSelect.addEventListener('change', () => {
-      const oldScale = currentScale;
       currentScale = freqs[scaleSelect.value];
-      for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-          if (notes[r][c].length > 0) {
-            notes[r][c] = [currentScale[r]];
+      for (let t = 0; t < trackCount; t++) {
+        for (let r = 0; r < rows; r++) {
+          for (let c = 0; c < cols; c++) {
+            if (notes[t][r][c].length > 0) {
+              notes[t][r][c] = [currentScale[r]];
+            }
           }
         }
       }
@@ -142,40 +251,60 @@
 
     tempoSlider.addEventListener('input', () => {
       if (isPlaying) {
-        clearInterval(intervalId);
+        clearTimeout(intervalId);
         const bpm = parseInt(tempoSlider.value);
-        intervalId = setInterval(step, 60000 / bpm / 2);
+        intervalId = setTimeout(step, 60000 / bpm / 2);
       }
     });
 
     saveBtn.addEventListener('click', () => {
-      localStorage.setItem('savedNotes', JSON.stringify(notes));
+      const data = { notes, cols, tempoPattern, harmonics };
+      localStorage.setItem('savedNotes', JSON.stringify(data));
       alert('Saved!');
     });
 
     loadBtn.addEventListener('click', () => {
       const loaded = JSON.parse(localStorage.getItem('savedNotes'));
       if (loaded) {
-        notes = loaded;
+        cols = loaded.cols || cols;
+        colInput.value = cols;
+        tempoPattern = loaded.tempoPattern || [];
+        harmonics = loaded.harmonics || harmonics;
+        buildGrid();
+        notes = loaded.notes || notes;
         document.querySelectorAll('.cell').forEach(cell => {
           const r = parseInt(cell.dataset.row);
           const c = parseInt(cell.dataset.col);
-          cell.classList.toggle('active', notes[r][c].length > 0);
+          for (let t = 0; t < trackCount; t++) {
+            if (notes[t][r][c].length > 0) { cell.classList.add('active'); break; }
+          }
+        });
+        harmonicDiv.querySelectorAll('input').forEach(cb => {
+          const r = parseInt(cb.dataset.row);
+          cb.checked = harmonics[r];
         });
         alert('Loaded!');
       }
     });
 
+    applyGridBtn.addEventListener('click', () => {
+      cols = parseInt(colInput.value) || cols;
+      tempoPattern = tempoPatternInput.value.split(',').map(v => v.trim()).filter(v => v);
+      buildGrid();
+    });
+
     document.getElementById('downloadMIDI').addEventListener('click', () => {
       const midi = new Midi();
-      const track = midi.addTrack();
       const bpm = parseInt(tempoSlider.value);
       const beatDur = 60000 / bpm / 2 / 1000;
-      for (let c = 0; c < cols; c++) {
-        for (let r = 0; r < rows; r++) {
-          notes[r][c].forEach(freq => {
-            track.addNote({ midi: Math.round(69 + 12 * Math.log2(freq / 440)), time: c * beatDur, duration: beatDur });
-          });
+      for (let t = 0; t < trackCount; t++) {
+        const track = midi.addTrack();
+        for (let c = 0; c < cols; c++) {
+          for (let r = 0; r < rows; r++) {
+            notes[t][r][c].forEach(freq => {
+              track.addNote({ midi: Math.round(69 + 12 * Math.log2(freq / 440)), time: c * beatDur, duration: beatDur });
+            });
+          }
         }
       }
       const bytes = midi.toArray();

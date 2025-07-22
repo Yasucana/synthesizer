@@ -1,10 +1,14 @@
 # Synthesizer Spec Sheet
 
 ## Overview
-This repository contains a simple web-based music composer/synthesizer implemented in `mcomp.html`. The interface allows users to select musical scale, waveform type, tempo, volume, note length, and compose music using an 8x16 grid.
+This repository contains a web-based music composer implemented in `mcomp.html`. The interface allows users to select musical scale, waveform type, tempo, volume, note length, and compose music using a configurable grid.
 
 ## Features
-- 8x16 grid for placing notes across 8 rows and 16 columns.
+- Configurable grid size (number of columns).
+- Up to three tracks for layering melodies or rhythms.
+- Optional delay or reverb effects.
+- Per-measure tempo changes via a tempo pattern input.
+- Harmonically enhanced rows using checkboxes.
 - Support for multiple scales: C Major, D Major, A Minor.
 - Multiple waveform options: sine, square, triangle, sawtooth.
 - Adjustable tempo (60-240 BPM), volume (0-1), and note length (100-1000 ms).
