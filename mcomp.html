@@ -5,7 +5,7 @@
   <title>Advanced Music Composer</title>
   <style>
     body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; }
-    #grid { display: grid; grid-template-columns: repeat(16, 40px); grid-template-rows: repeat(8, 40px); margin: 20px; }
+    #grid { display: grid; margin: 20px; }
     .cell { width: 40px; height: 40px; border: 1px solid #ccc; cursor: pointer; }
     .active { background: #4caf50; }
     .playing { border: 2px solid red; }
@@ -28,12 +28,18 @@
       <option value="triangle">Triangle</option>
       <option value="sawtooth">Sawtooth</option>
     </select>
+    Grid Columns: <input type="number" id="colsInput" min="4" max="32" value="16" style="width:60px;">
+    Track: <select id="trackSelect"></select>
+    <label><input type="checkbox" id="delayChk">Delay</label>
+    <label><input type="checkbox" id="reverbChk">Reverb</label>
   </div>
   <div>
     Tempo (BPM): <input type="range" id="tempo" min="60" max="240" value="120">
     Volume: <input type="range" id="volume" min="0" max="1" step="0.01" value="0.2">
     Note Length (ms): <input type="range" id="length" min="100" max="1000" value="300">
+    Tempo Pattern: <input id="tempoPattern" placeholder="120,140..." style="width:120px;">
   </div>
+  <div id="harmonics"></div>
   <button id="playBtn">Play</button>
   <button id="saveBtn">Save</button>
   <button id="loadBtn">Load</button>
@@ -42,7 +48,9 @@
 
   <script src="https://cdn.jsdelivr.net/npm/@tonejs/midi@2.0.27/build/Midi.min.js"></script>
   <script>
-    const rows = 8, cols = 16;
+    const rows = 8;
+    let cols = 16;
+    const trackCount = 3;
     const grid = document.getElementById('grid');
     const playBtn = document.getElementById('playBtn');
     const saveBtn = document.getElementById('saveBtn');
@@ -52,140 +60,228 @@
     const tempoSlider = document.getElementById('tempo');
     const volumeSlider = document.getElementById('volume');
     const lengthSlider = document.getElementById('length');
+    const colsInput = document.getElementById('colsInput');
+    const trackSelect = document.getElementById('trackSelect');
+    const delayChk = document.getElementById('delayChk');
+    const reverbChk = document.getElementById('reverbChk');
+    const tempoPattern = document.getElementById('tempoPattern');
+    const harmonicsDiv = document.getElementById('harmonics');
 
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    let notes = Array.from({ length: rows }, () => Array.from({ length: cols }, () => []));
+    const delayNode = ctx.createDelay();
+    delayNode.delayTime.value = 0.25;
+    const reverb = ctx.createConvolver();
+    const imp = ctx.createBuffer(2, ctx.sampleRate * 1.5, ctx.sampleRate);
+    for (let i = 0; i < imp.length; i++) {
+      imp.getChannelData(0)[i] = (imp.length - i) / imp.length * (Math.random() * 2 - 1);
+      imp.getChannelData(1)[i] = (imp.length - i) / imp.length * (Math.random() * 2 - 1);
+    }
+    reverb.buffer = imp;
+
+    let notes = [];
+    const trackWaveforms = Array(trackCount).fill('sine');
+    const harmonicChecks = [];
     const freqs = {
       C: [261.63, 294.33, 327.03, 348.84, 392.44, 436.05, 490.56, 523.26],
       D: [293.66, 329.63, 367.92, 391.0, 440.0, 489.9, 551.3, 587.3],
       A: [220.0, 246.9, 275.0, 293.7, 329.6, 367.9, 413.3, 440.0]
     };
 
-    let currentScale = freqs['C'];
-    let isPlaying = false, currentCol = 0, intervalId = null;
+let currentScale = freqs['C'];
+let isPlaying = false, currentCol = 0, intervalId = null;
 
+function initData() {
+  notes = Array.from({ length: trackCount }, () =>
+    Array.from({ length: rows }, () => Array.from({ length: cols }, () => []))
+  );
+}
+
+function buildGrid() {
+  grid.innerHTML = '';
+  grid.style.gridTemplateColumns = `repeat(${cols}, 40px)`;
+  grid.style.gridTemplateRows = `repeat(${rows}, 40px)`;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      cell.dataset.row = r;
+      cell.dataset.col = c;
+      cell.addEventListener('click', e => {
+        const t = parseInt(trackSelect.value);
+        const already = notes[t][r][c].some(n => n === currentScale[r]);
+        if (e.ctrlKey) {
+          if (!already) notes[t][r][c].push(currentScale[r]);
+        } else if (already) {
+          notes[t][r][c] = [];
+        } else {
+          notes[t][r][c] = [currentScale[r]];
+        }
+        updateGrid();
+      });
+      grid.appendChild(cell);
+    }
+  }
+  updateGrid();
+}
+
+function updateGrid() {
+  const t = parseInt(trackSelect.value);
+  document.querySelectorAll('.cell').forEach(cell => {
+    const r = parseInt(cell.dataset.row);
+    const c = parseInt(cell.dataset.col);
+    cell.classList.toggle('active', notes[t][r][c].length > 0);
+  });
+}
+
+for (let i = 0; i < trackCount; i++) {
+  const opt = document.createElement('option');
+  opt.value = i;
+  opt.textContent = 'Track ' + (i + 1);
+  trackSelect.appendChild(opt);
+}
+trackSelect.addEventListener('change', () => {
+  waveformSelect.value = trackWaveforms[trackSelect.value];
+  updateGrid();
+});
+
+waveformSelect.addEventListener('change', () => {
+  trackWaveforms[trackSelect.value] = waveformSelect.value;
+});
+
+colsInput.addEventListener('change', () => {
+  cols = parseInt(colsInput.value);
+  initData();
+  buildGrid();
+});
+
+for (let r = 0; r < rows; r++) {
+  const label = document.createElement('label');
+  label.textContent = `Row ${r + 1} Harmonic`;
+  const chk = document.createElement('input');
+  chk.type = 'checkbox';
+  chk.dataset.row = r;
+  label.appendChild(chk);
+  harmonicsDiv.appendChild(label);
+  harmonicChecks.push(chk);
+}
+
+function playNote(freq, waveform, volume, length) {
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = waveform;
+  osc.frequency.value = freq;
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  if (delayChk.checked) gain.connect(delayNode);
+  if (reverbChk.checked) gain.connect(reverb);
+  delayNode.connect(ctx.destination);
+  reverb.connect(ctx.destination);
+  gain.gain.setValueAtTime(volume, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + length / 1000);
+  osc.start();
+  osc.stop(ctx.currentTime + length / 1000);
+}
+
+function step() {
+  document.querySelectorAll('.cell').forEach(cell => {
+    cell.classList.toggle('playing', parseInt(cell.dataset.col) === currentCol);
+  });
+  const volume = parseFloat(volumeSlider.value);
+  const length = parseInt(lengthSlider.value);
+  for (let t = 0; t < trackCount; t++) {
+    const wf = trackWaveforms[t];
+    for (let r = 0; r < rows; r++) {
+      notes[t][r][currentCol].forEach(freq => {
+        playNote(freq, wf, volume, length);
+        if (harmonicChecks[r].checked) {
+          playNote(freq * 2, wf, volume * 0.6, length);
+        }
+      });
+    }
+  }
+  currentCol = (currentCol + 1) % cols;
+  const tempos = tempoPattern.value.split(',').map(v => parseInt(v.trim())).filter(v => v);
+  const mlen = cols / (tempos.length || 1);
+  const bpm = tempos[Math.floor(currentCol / mlen)] || parseInt(tempoSlider.value);
+  intervalId = setTimeout(step, 60000 / bpm / 2);
+}
+
+playBtn.addEventListener('click', () => {
+  if (!isPlaying) {
+    currentCol = 0;
+    step();
+    isPlaying = true;
+    playBtn.textContent = 'Pause';
+  } else {
+    clearTimeout(intervalId);
+    isPlaying = false;
+    playBtn.textContent = 'Play';
+  }
+});
+
+tempoSlider.addEventListener('input', () => {
+  if (isPlaying) {
+    clearTimeout(intervalId);
+    step();
+  }
+});
+
+scaleSelect.addEventListener('change', () => {
+  currentScale = freqs[scaleSelect.value];
+  for (let t = 0; t < trackCount; t++) {
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        const cell = document.createElement('div');
-        cell.className = 'cell';
-        cell.dataset.row = r;
-        cell.dataset.col = c;
-        cell.addEventListener('click', e => {
-          const already = notes[r][c].some(n => n === currentScale[r]);
-          if (e.ctrlKey) {
-            if (!already) notes[r][c].push(currentScale[r]);
-          } else if (already) {
-            notes[r][c] = [];
-          } else {
-            notes[r][c] = [currentScale[r]];
-          }
-          cell.classList.toggle('active', notes[r][c].length > 0);
-        });
-        grid.appendChild(cell);
+        if (notes[t][r][c].length > 0) notes[t][r][c] = [currentScale[r]];
       }
     }
+  }
+  updateGrid();
+});
 
-    function playNote(freq, waveform, volume, length) {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = waveform;
-      osc.frequency.value = freq;
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      gain.gain.setValueAtTime(volume, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + length / 1000);
-      osc.start();
-      osc.stop(ctx.currentTime + length / 1000);
-    }
+saveBtn.addEventListener('click', () => {
+  localStorage.setItem('savedNotes', JSON.stringify(notes));
+  alert('Saved!');
+});
 
-    function step() {
-      document.querySelectorAll('.cell').forEach(cell => {
-        cell.classList.toggle('playing', parseInt(cell.dataset.col) === currentCol);
-      });
+loadBtn.addEventListener('click', () => {
+  const loaded = JSON.parse(localStorage.getItem('savedNotes'));
+  if (loaded) {
+    notes = loaded;
+    updateGrid();
+    alert('Loaded!');
+  }
+});
 
-      const waveform = waveformSelect.value;
-      const volume = parseFloat(volumeSlider.value);
-      const length = parseInt(lengthSlider.value);
-
-      for (let r = 0; r < rows; r++) {
-        notes[r][currentCol].forEach(freq => {
-          playNote(freq, waveform, volume, length);
-        });
-      }
-      currentCol = (currentCol + 1) % cols;
-    }
-
-    playBtn.addEventListener('click', () => {
-      if (!isPlaying) {
-        const bpm = parseInt(tempoSlider.value);
-        intervalId = setInterval(step, 60000 / bpm / 2);
-        isPlaying = true;
-        playBtn.textContent = 'Pause';
-      } else {
-        clearInterval(intervalId);
-        isPlaying = false;
-        playBtn.textContent = 'Play';
-      }
-    });
-
-    scaleSelect.addEventListener('change', () => {
-      const oldScale = currentScale;
-      currentScale = freqs[scaleSelect.value];
-      for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < cols; c++) {
-          if (notes[r][c].length > 0) {
-            notes[r][c] = [currentScale[r]];
-          }
-        }
-      }
-    });
-
-    tempoSlider.addEventListener('input', () => {
-      if (isPlaying) {
-        clearInterval(intervalId);
-        const bpm = parseInt(tempoSlider.value);
-        intervalId = setInterval(step, 60000 / bpm / 2);
-      }
-    });
-
-    saveBtn.addEventListener('click', () => {
-      localStorage.setItem('savedNotes', JSON.stringify(notes));
-      alert('Saved!');
-    });
-
-    loadBtn.addEventListener('click', () => {
-      const loaded = JSON.parse(localStorage.getItem('savedNotes'));
-      if (loaded) {
-        notes = loaded;
-        document.querySelectorAll('.cell').forEach(cell => {
-          const r = parseInt(cell.dataset.row);
-          const c = parseInt(cell.dataset.col);
-          cell.classList.toggle('active', notes[r][c].length > 0);
-        });
-        alert('Loaded!');
-      }
-    });
-
-    document.getElementById('downloadMIDI').addEventListener('click', () => {
-      const midi = new Midi();
-      const track = midi.addTrack();
-      const bpm = parseInt(tempoSlider.value);
+document.getElementById('downloadMIDI').addEventListener('click', () => {
+  const midi = new Midi();
+  for (let t = 0; t < trackCount; t++) {
+    const tr = midi.addTrack();
+    const tempos = tempoPattern.value.split(',').map(v => parseInt(v.trim())).filter(v => v);
+    const mlen = cols / (tempos.length || 1);
+    let time = 0;
+    for (let c = 0; c < cols; c++) {
+      const bpm = tempos[Math.floor(c / mlen)] || parseInt(tempoSlider.value);
       const beatDur = 60000 / bpm / 2 / 1000;
-      for (let c = 0; c < cols; c++) {
-        for (let r = 0; r < rows; r++) {
-          notes[r][c].forEach(freq => {
-            track.addNote({ midi: Math.round(69 + 12 * Math.log2(freq / 440)), time: c * beatDur, duration: beatDur });
-          });
-        }
+      for (let r = 0; r < rows; r++) {
+        notes[t][r][c].forEach(freq => {
+          tr.addNote({ midi: Math.round(69 + 12 * Math.log2(freq / 440)), time, duration: beatDur });
+        });
       }
-      const bytes = midi.toArray();
-      const blob = new Blob([bytes], { type: 'audio/midi' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'composition.mid';
-      a.click();
-    });
+      time += beatDur;
+    }
+  }
+  const bytes = midi.toArray();
+  const blob = new Blob([bytes], { type: 'audio/midi' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'composition.mid';
+  a.click();
+});
+
+initData();
+buildGrid();
+
   </script>
 </body>
 </html>
